@@ -137,9 +137,9 @@ Lorsqu'un emplacement libre est créé ou supprimé dans le *memory pool*, il es
 
 Voici un exemple de décomposition d'une taille d'emplacement de 781 octets en fonction des index de premier (fl) et second niveau (sl) :
 ```
-0000 0011 0000 1101 = x030D = 781 octets  
-______________ ____
-     fl=9      sl=13
+0000001 1000 01101 = x030D = 781 octets  
+_______ ____
+  fl=9  sl=8
 (MSB position) (value)
 ```
 
