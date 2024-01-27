@@ -10,14 +10,14 @@
 
  opt c
 
- INCLUDE "constant/types.const.asm"
+ INCLUDE "new-engine/constant/types.const.asm"
 
 ; tlsf structure
 ; --------------
 
 tlsf.blockHdr STRUCT
 size      rmb types.WORD ; (FREE/USED) [0] [000 0000 0000 0000] - [1:free/0:used] [free size - 1]
-prev.phys rmb types.WORD ; (FREE/USED) [0000 0000 0000 0000]    - [previous physical block in memory]
+prev.phys rmb types.WORD ; (FREE/USED) [0000 0000 0000 0000]    - [previous physical block in memory, tlsf.block.nullptr if no one]
 prev      rmb types.WORD ; (FREE)      [0000 0000 0000 0000]    - [previous block in free list]
 next      rmb types.WORD ; (FREE)      [0000 0000 0000 0000]    - [next block in free list]
  ENDSTRUCT
@@ -40,11 +40,13 @@ tlsf.block.nullptr      equ   -1
 ; -------------------------------------
 tlsf.err              fcb   0
 tlsf.err.callback     fdb   tlsf.err.loop ; error callback, default is an infinite loop
-tlsf.err.init.MIN_SIZE        equ   1     ; memory pool should have sizeof{tlsf.blockHdr} as a minimum size
-tlsf.err.init.MAX_SIZE        equ   2     ; memory pool should have 32768 ($8000) as a maximum size
-tlsf.err.malloc.NO_MORE_SPACE equ   3     ; no more space in memory pool 
-tlsf.err.malloc.MAX_SIZE      equ   4     ; malloc can not handle more than 63488 ($F800) bytes request
-tlsf.err.free.NULL_PTR        equ   5     ; memory location to free cannot be NULL
+tlsf.err.init.MIN_SIZE         equ   1     ; memory pool should have sizeof{tlsf.blockHdr} as a minimum size
+tlsf.err.init.MAX_SIZE         equ   2     ; memory pool should have 32768 ($8000) as a maximum size
+tlsf.err.malloc.OUT_OF_MEMORY  equ   3     ; no more space in memory pool 
+tlsf.err.malloc.MAX_SIZE       equ   4     ; malloc can not handle more than 63488 ($F800) bytes request
+tlsf.err.free.NULL_PTR         equ   5     ; memory location to free cannot be NULL
+tlsf.err.realloc.MAX_SIZE      equ   6     ; realloc can not handle more than 63488 ($F800) bytes request
+tlsf.err.realloc.OUT_OF_MEMORY equ   7     ; 
 
 ; tlsf internal variables
 ; -----------------------
@@ -193,7 +195,7 @@ _tlsf.findSuitableBlock MACRO
         andb  1,x                      ; apply mask to keep only upper fl values
         std   tlsf.ctz.in
         bne   >
-            lda   #tlsf.err.malloc.NO_MORE_SPACE
+            lda   #tlsf.err.malloc.OUT_OF_MEMORY
             sta   tlsf.err
             ldx   tlsf.err.callback
             leas  2,s                  ; WARNING ! dependency on calling tree, when using as a macro in malloc, should be 2
@@ -289,7 +291,7 @@ tlsf.rsize  equ *-2                          ; requested memory size
             ldd   tlsf.blockHdr.size,x      ; load parameter for mapping routine
             anda  #^tlsf.mask.FREE_BLOCK    ; must update the following block to the new previous physical block
             addd  #tlsf.BHDR_OVERHEAD+1     ; size is stored as size-1
-            leay  d,x                       ; X is now a ptr to next physical of next physical (from deallocated block)
+            leay  d,x                       ; Y is now a ptr to next physical of next physical (from deallocated block)
             beq   @nonext                   ; branch if end of memory (when memory pool goes up to the end of addressable 16bit memory)
                 cmpy  tlsf.memoryPool.end
                 bhs   @nonext               ; branch if no next of next physical block (beyond memorypool)
@@ -310,6 +312,7 @@ tlsf.rsize  equ *-2                          ; requested memory size
 ;-----------------------------------------------------------------
 ; tlsf.free
 ; input REG : [U] allocated memory address to free
+; output REG : [X] memory address of merged free block header
 ;-----------------------------------------------------------------
 ; deallocate previously allocated memory
 ;-----------------------------------------------------------------
@@ -375,7 +378,9 @@ tlsf.free
         ora   #tlsf.mask.FREE_BLOCK
         std   tlsf.blockHdr.size,u
         jsr   tlsf.mappingFreeBlock
-        jmp   tlsf.insertBlock
+        jsr   tlsf.insertBlock
+        ldx   tlsf.insertBlock.location
+        rts
 
 ;-----------------------------------------------------------------
 ; tlsf.mappingSearch
@@ -522,7 +527,7 @@ tlsf.insertBlock.location equ *-2
 ; tlsf.removeBlock
 ; input  VAR : [tlsf.fl] first level index
 ; input  VAR : [tlsf.sl] second level index
-; input  REG : [X] address of block to remove
+; input  REG : [X] address of block header to remove
 ; trash      : [D,U]
 ;-----------------------------------------------------------------
 ; remove a free block in his linked list, and update index
@@ -597,7 +602,7 @@ tlsf.removeBlockHead
 
 ;-----------------------------------------------------------------
 ; tlsf.bsr
-; input  REG : [tlsf.bsr.in] 16bit integer (1-xFFFF)
+; input  VAR : [tlsf.bsr.in] 16bit integer (1-xFFFF)
 ; output REG : [B] number of leading 0-bits
 ;-----------------------------------------------------------------
 ; Bit Scan Reverse (bsr) in a 16 bit integer,
@@ -634,7 +639,7 @@ tlsf.bsr
 
 ;-----------------------------------------------------------------
 ; tlsf.ctz
-; input  REG : [tlsf.ctz.in] 16bit integer
+; input  VAR : [tlsf.ctz.in] 16bit integer
 ; output REG : [B] number of trailing 0-bits
 ;-----------------------------------------------------------------
 ; Count trailing zeros in a 16 bit integer,
@@ -669,3 +674,4 @@ tlsf.ctz
         bne   >
             incb
 !       rts
+

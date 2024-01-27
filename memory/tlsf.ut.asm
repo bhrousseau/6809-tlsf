@@ -4,30 +4,24 @@
 ; Benoit Rousseau - 02/09/2023
 ;-----------------------------------------------------------------
 
-        INCLUDE   "math\random.asm"
+
 
 tlsf.ut
-        ; for default settings only
-        ldb   #15                ; page number
-        lda   #$10
-        ora   <$6081             ; Set RAM
-        sta   <$6081             ; over data
-        sta   >$e7e7             ; space
-        orb   #$60               ; Set RAM over cartridge space
-        stb   >map.CF74021.CART  ; Switch ram page
-
         jsr   tlsf.ut.init
         jsr   tlsf.ut.mappingSearch
         jsr   tlsf.ut.malloc
+        jsr   tlsf.ut.realloc
         jsr   tlsf.ut.random
         rts
+
+        INCLUDE   "new-engine\math\random.asm"
 
 tlsf.ut.init
         ldd   #tlsf.err.return
         std   tlsf.err.callback        ; routine to call when tlsf raise an error
 
         ldd   #$0001                   ; only 1 byte is not enough for header info
-        ldx   #$1111
+        ldx   #$1111+tlsf.ut.MEMORY_POOL
         jsr   tlsf.init
         lda   tlsf.err
         cmpa  #tlsf.err.init.MIN_SIZE
@@ -36,7 +30,7 @@ tlsf.ut.init
 !       clr   tlsf.err
 
         ldd   #$0008                   ; with 4 bytes as headroom, make only 4 bytes available for a malloc
-        ldx   #$1111
+        ldx   #$1111+tlsf.ut.MEMORY_POOL
         jsr   tlsf.init
         lda   tlsf.err
         beq   >
@@ -52,7 +46,7 @@ tlsf.ut.init
         bne   *
 
         ldd   #$8004                   ; maximum allowed allocation for this tlsf implementation (with header)
-        ldx   #$2222
+        ldx   #$2222+tlsf.ut.MEMORY_POOL
         jsr   tlsf.init
         lda   tlsf.err
         beq   >
@@ -68,7 +62,7 @@ tlsf.ut.init
         bne   *
 
         ldd   #$8005                   ; over the maximum allowed allocation for this tlsf implementation (with header)
-        ldx   #$1111
+        ldx   #$1111+tlsf.ut.MEMORY_POOL
         jsr   tlsf.init
         lda   tlsf.err
         cmpa  #tlsf.err.init.MAX_SIZE
@@ -244,10 +238,117 @@ tlsf.ut.malloc
         bra   *
 @rts    rts
 
+tlsf.ut.realloc
+        ldd   #$1100
+        std   tlsf.ut.realloc.var
+        jsr   tlsf.ut.realloc.doOneTest
+        ldd   #$1105
+        std   tlsf.ut.realloc.var
+        jsr   tlsf.ut.realloc.doOneTest
+        ldd   #$1106
+        std   tlsf.ut.realloc.var
+        jmp   tlsf.ut.realloc.doOneTest
+
+tlsf.ut.realloc.doOneTest
+        ; init allocator
+        ldd   #$4000
+        ldx   #$0000+tlsf.ut.MEMORY_POOL
+        jsr   tlsf.init
+
+        clr   tlsf.err
+        ldd   #$101
+        jsr   tlsf.malloc              ; allocate a temp block
+        stu   @u0
+        lda   tlsf.err
+        beq   >
+        bra   * ; error trap
+!
+        ldd   #$3DFF                   ; maximum allowed size here, due to indexation of free block (see steps in chart)
+        jsr   tlsf.malloc
+        stu   @u1
+        lda   tlsf.err
+        beq   >
+        bra   * ; error trap
+!
+        ; [u] contain address of allocated memory
+        ldd   #$2000
+        clr   tlsf.err
+        jsr   tlsf.realloc             ; test case : shrink to a specific size (tlsf.realloc.shrink)
+        cmpu  @u1
+        beq   >
+        lda   tlsf.err
+        beq   >
+        bra   * ; error trap
+!
+        ldd   #1
+        jsr   tlsf.realloc             ; test case : shrink min size 1 rounded to 4 (tlsf.realloc.shrink)
+        cmpu  @u1
+        beq   >
+        lda   tlsf.err
+        beq   >
+        bra   * ; error trap
+!
+        ldd   #0
+        jsr   tlsf.realloc             ; test case : shrink min size 0 rounded to 4 (tlsf.realloc.shrink), size is identical, return
+        cmpu  @u1
+        beq   >
+        lda   tlsf.err
+        beq   >
+        bra   * ; error trap
+!
+        ldd   #$1000
+        jsr   tlsf.realloc             ; test case : growth (tlsf.realloc.growth)
+        cmpu  @u1
+        beq   >
+        lda   tlsf.err
+        beq   >
+        bra   * ; error trap
+!
+        ldd   #$2DFF                   ; allocate near full memory
+        jsr   tlsf.malloc
+        lda   tlsf.err
+        beq   >
+        bra   * ; error trap
+!
+        ldu   @u0
+        jsr   tlsf.free                ; free temp block
+        lda   tlsf.err
+        beq   >
+        bra   * ; error trap
+!                                      ; should test three branches of test case: tlsf.realloc.do
+        ldu   @u1                      ; $1100 (malloc ok, memcpy)
+        ldd   tlsf.ut.realloc.var      ; $1105 (malloc ko, but recycle of free block ok, memcpy)
+        jsr   tlsf.realloc             ; $1106 (malloc ko, recycle of free block ko, memcpy)
+        ldd   tlsf.ut.realloc.var
+        cmpd  #$1106
+        beq   @errorCase               ; an error is expected for the third case
+        lda   tlsf.err
+        beq   >
+        bra   * ; error trap
+!
+        rts
+@errorCase
+        lda   tlsf.err
+        bne   >
+        bra   * ; error trap
+!
+        ldu   #$0004
+        ldd   #$1107
+        jsr   tlsf.realloc             ; (malloc ko, recycle of free block ko, no memcpy)
+        lda   tlsf.err
+        bne   >
+        bra   * ; error trap
+!
+        rts
+;
+tlsf.ut.realloc.var fdb 0
+@u0     fdb   0
+@u1     fdb   0
+
 tlsf.ut.random
         ; init allocator
         ldd   #$4000
-        ldx   #$0000
+        ldx   #$0000+tlsf.ut.MEMORY_POOL
         jsr   tlsf.init
 
         ldd   #tlsf.ut.random.free
@@ -269,8 +370,13 @@ tlsf.ut.random.malloc.switch
         andb  #%11111111
         addd  #1
         jsr   tlsf.malloc
-        cmpu  #$4000
+ IFEQ tlsf.ut.MEMORY_POOL-$C000
+        cmpu  #tlsf.ut.MEMORY_POOL     ; special case, when $4000 memory pool is at the end of RAM
+        blo   @exit
+ ELSE
+        cmpu  #$4000+tlsf.ut.MEMORY_POOL
         bhs   @exit
+ ENDC
         ldx   #allocRefs
         stu   1234,x
 @d      equ   *-2
@@ -279,7 +385,7 @@ tlsf.ut.random.malloc.switch
 
 tlsf.ut.random.free
         lda   tlsf.err
-        cmpa  #tlsf.err.malloc.NO_MORE_SPACE
+        cmpa  #tlsf.err.malloc.OUT_OF_MEMORY
         beq   >
         bra   *
 !       clr   tlsf.err
